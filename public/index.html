@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>axtok</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:black;color:white;overflow:hidden;height:100vh}
+    .no-scrollbar::-webkit-scrollbar{display:none}
+    .videowrapper iframe{width:100%;height:100%;object-fit:cover}
+    .bottom-nav{background:rgba(0,0,0,0.92);backdrop-filter:blur(16px);border-top:0.5px solid rgba(255,255,255,0.1)}
+    .nav-active i,.nav-active span{color:#fe2c55}
+    .page{position:absolute;top:0;left:0;right:0;bottom:0;overflow-y:auto;transition:transform 0.2s;background:black}
+    .page.hide{transform:translateX(100%);pointer-events:none}
+    .page.show{transform:translateX(0);pointer-events:auto}
+    .videocontainer{height:100%;width:100%}
+  </style>
+</head>
+<body>
+<div id="app" class="relative h-full w-full overflow-hidden"></div>
+<script>
+(function(){
+  let token = localStorage.getItem('axtoktoken');
+  let currentuser = null;
+  let currentpage = 'home';
+  let videos = [];
+  let currentvideoidx = 0;
+  
+  const api = 'http://localhost:5000/api';
+  
+  function fetchapi(endpoint, options = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch(`${api}${endpoint}`, { ...options, headers }).then(r => r.json());
+  }
+  
+  async function loadvideos() {
+    const data = await fetchapi('/videos');
+    if (Array.isArray(data)) videos = data;
+  }
+  
+  function render() {
+    const app = document.getElementById('app');
+    if (!token || !currentuser) {
+      app.innerHTML = rendersignin();
+      attachsigninevents();
+      return;
+    }
+    app.innerHTML = renderhome();
+    attachhomeevents();
+    if (currentpage === 'home') loadvideos().then(() => renderfeed());
+    else if (currentpage === 'profile') renderprofilepage();
+    else if (currentpage === 'search') rendersearchpage();
+    else if (currentpage === 'inbox') renderinboxpage();
+    else if (currentpage === 'upload') renderuploadpage();
+  }
+  
+  function rendersignin() {
+    return `
+      <div class="min-h-screen flex items-center justify-center p-4 bg-black">
+        <div class="bg-white/5 rounded-2xl p-8 w-full max-w-md">
+          <h1 class="text-3xl font-bold text-center mb-6">axtok</h1>
+          <div id="authstatus"></div>
+          <input type="text" id="loginemail" placeholder="email" class="w-full bg-white/10 rounded-full px-4 py-3 mb-3 outline-none">
+          <input type="password" id="loginpass" placeholder="password" class="w-full bg-white/10 rounded-full px-4 py-3 mb-4 outline-none">
+          <button id="loginbtn" class="w-full bg-red-500 py-3 rounded-full font-bold mb-3">login</button>
+          <button id="showregister" class="w-full text-white/60 text-sm">create account</button>
+          <div id="registerform" class="hidden mt-4">
+            <input type="text" id="regusername" placeholder="username" class="w-full bg-white/10 rounded-full px-4 py-3 mb-3 outline-none">
+            <input type="email" id="regemail" placeholder="email" class="w-full bg-white/10 rounded-full px-4 py-3 mb-3 outline-none">
+            <input type="password" id="regpass" placeholder="password" class="w-full bg-white/10 rounded-full px-4 py-3 mb-4 outline-none">
+            <button id="registerbtn" class="w-full bg-red-500 py-3 rounded-full font-bold">register</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  
+  function attachsigninevents() {
+    document.getElementById('loginbtn')?.onclick = async () => {
+      const email = document.getElementById('loginemail').value;
+      const password = document.getElementById('loginpass').value;
+      const res = await fetchapi('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      if (res.token) {
+        token = res.token;
+        currentuser = res.user;
+        localStorage.setItem('axtoktoken', token);
+        localStorage.setItem('axtokuser', JSON.stringify(currentuser));
+        render();
+      } else alert(res.error || 'login failed');
+    };
+    document.getElementById('showregister')?.onclick = () => {
+      document.getElementById('registerform').classList.toggle('hidden');
+    };
+    document.getElementById('registerbtn')?.onclick = async () => {
+      const username = document.getElementById('regusername').value;
+      const email = document.getElementById('regemail').value;
+      const password = document.getElementById('regpass').value;
+      const res = await fetchapi('/auth/register', { method: 'POST', body: JSON.stringify({ username, email, password }) });
+      if (res.token) {
+        token = res.token;
+        currentuser = res.user;
+        localStorage.setItem('axtoktoken', token);
+        localStorage.setItem('axtokuser', JSON.stringify(currentuser));
+        render();
+      } else alert(res.error || 'register failed');
+    };
+  }
+  
+  function renderhome() {
+    return `
+      <div class="flex flex-col h-full">
+        <div class="flex-1 relative overflow-hidden" id="feedarea">
+          <div id="feedcontainer" class="h-full w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar"></div>
+          <div class="absolute bottom-20 right-2 flex flex-col items-center space-y-4 z-10">
+            <button id="likebtn" class="flex flex-col items-center"><i class="far fa-heart text-3xl"></i><span id="likecount">0</span></button>
+            <button id="commentbtn" class="flex flex-col items-center"><i class="far fa-comment-dots text-3xl"></i><span id="commentcount">0</span></button>
+            <button id="sharebtn" class="flex flex-col items-center"><i class="fas fa-share text-3xl"></i><span class="text-xs">share</span></button>
+            <div class="w-9 h-9 rounded-full overflow-hidden border-2 border-white cursor-pointer" id="avatarclick"><img id="currentavatar" src="${currentuser.avatar}" class="w-full h-full object-cover"></div>
+          </div>
+          <div class="absolute bottom-20 left-3 z-10 max-w-[70%]">
+            <div id="videocaption" class="text-sm font-semibold bg-black/40 rounded-lg px-2 py-1"></div>
+            <div class="flex items-center gap-2 mt-1"><span id="videousername" class="text-sm font-bold cursor-pointer"></span><button id="followbtn" class="border border-white text-white text-xs px-2 py-0.5 rounded-full">follow</button></div>
+            <div class="text-xs text-white/80"><i class="fas fa-music mr-1"></i> <span id="videosound"></span></div>
+          </div>
+        </div>
+        <div class="bottom-nav flex justify-around items-center py-2 px-4">
+          <button id="navhome" class="nav-active flex flex-col items-center"><i class="fas fa-home text-xl"></i><span class="text-[10px]">home</span></button>
+          <button id="navsearch" class="flex flex-col items-center"><i class="fas fa-search text-xl"></i><span class="text-[10px]">search</span></button>
+          <button id="navupload" class="flex flex-col items-center"><i class="fas fa-plus-circle text-xl"></i><span class="text-[10px]">create</span></button>
+          <button id="navinbox" class="flex flex-col items-center"><i class="far fa-heart text-xl"></i><span class="text-[10px]">inbox</span></button>
+          <button id="navprofile" class="flex flex-col items-center"><i class="far fa-user text-xl"></i><span class="text-[10px]">profile</span></button>
+        </div>
+      </div>
+    `;
+  }
+  
+  async function renderfeed() {
+    await loadvideos();
+    const container = document.getElementById('feedcontainer');
+    if (!container) return;
+    container.innerHTML = '';
+    for (let v of videos) {
+      const div = document.createElement('div');
+      div.className = 'relative h-full w-full snap-start snap-always flex-shrink-0 bg-black';
+      div.innerHTML = `<div class="videowrapper w-full h-full"><iframe src="${v.videourl}" class="w-full h-full" allowfullscreen frameborder="0"></iframe></div>`;
+      container.appendChild(div);
+    }
+    updatefeedui();
+    setupintersection();
+  }
+  
+  function updatefeedui() {
+    if (!videos[currentvideoidx]) return;
+    const v = videos[currentvideoidx];
+    document.getElementById('likecount').innerText = v.likescount;
+    document.getElementById('commentcount').innerText = v.commentscount;
+    document.getElementById('videocaption').innerText = v.caption || '';
+    document.getElementById('videousername').innerText = '@' + v.username;
+    document.getElementById('videosound').innerText = v.sound;
+    document.getElementById('currentavatar').src = v.avatar;
+    const likeicon = document.querySelector('#likebtn i');
+    if (likeicon) likeicon.className = v.liked ? 'fas fa-heart text-3xl text-red-500' : 'far fa-heart text-3xl';
+  }
+  
+  function setupintersection() {
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const idx = Array.from(entry.target.parentElement.children).indexOf(entry.target);
+          if (idx !== -1 && idx !== currentvideoidx) {
+            currentvideoidx = idx;
+            updatefeedui();
+          }
+        }
+      });
+    }, { threshold: 0.6 });
+    document.querySelectorAll('#feedcontainer > div').forEach(el => observer.observe(el));
+  }
+  
+  function attachhomeevents() {
+    document.getElementById('navprofile')?.onclick = () => { currentpage = 'profile'; render(); };
+    document.getElementById('navsearch')?.onclick = () => { currentpage = 'search'; render(); };
+    document.getElementById('navinbox')?.onclick = () => { currentpage = 'inbox'; render(); };
+    document.getElementById('navupload')?.onclick = () => { currentpage = 'upload'; render(); };
+    document.getElementById('navhome')?.onclick = () => { currentpage = 'home'; render(); };
+    document.getElementById('avatarclick')?.onclick = () => { currentpage = 'profile'; render(); };
+    document.getElementById('likebtn')?.onclick = async () => {
+      const v = videos[currentvideoidx];
+      const res = await fetchapi(`/social/like/${v.id}`, { method: 'POST' });
+      if (res.liked !== undefined) {
+        if (res.liked) v.likescount++;
+        else v.likescount--;
+        document.getElementById('likecount').innerText = v.likescount;
+      }
+    };
+    document.getElementById('commentbtn')?.onclick = () => {
+      const v = videos[currentvideoidx];
+      const text = prompt('add comment:');
+      if (text) fetchapi(`/social/comment/${v.id}`, { method: 'POST', body: JSON.stringify({ content: text }) }).then(() => { loadvideos(); renderfeed(); });
+    };
+  }
+  
+  async function renderprofilepage() {
+    const userdata = await fetchapi(`/users/${currentuser.id}`);
+    document.getElementById('app').innerHTML = `
+      <div class="flex flex-col h-full">
+        <div class="sticky top-0 bg-black/95 p-4 flex items-center gap-4 border-b border-white/10">
+          <button id="backhome" class="text-2xl"><i class="fas fa-arrow-left"></i></button>
+          <h1 class="text-xl font-bold">profile</h1>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4">
+          <div class="flex flex-col items-center gap-4">
+            <img src="${userdata.avatar}" class="w-28 h-28 rounded-full border-2 border-white">
+            <h2 class="text-xl font-bold">@${userdata.username}</h2>
+            <p class="text-white/70">${userdata.bio || 'no bio yet'}</p>
+            <div class="flex gap-8 text-center">
+              <div><span class="font-bold text-lg">${userdata.followerscount}</span><p class="text-xs">followers</p></div>
+              <div><span class="font-bold text-lg">${userdata.followingcount}</span><p class="text-xs">following</p></div>
+            </div>
+            <button id="editbio" class="border border-white/30 px-6 py-2 rounded-full text-sm">edit bio</button>
+          </div>
+        </div>
+        <div class="bottom-nav flex justify-around items-center py-2 px-4">
+          <button id="navhome2" class="flex flex-col items-center"><i class="fas fa-home text-xl"></i><span class="text-[10px]">home</span></button>
+          <button id="navsearch2" class="flex flex-col items-center"><i class="fas fa-search text-xl"></i><span class="text-[10px]">search</span></button>
+          <button id="navupload2" class="flex flex-col items-center"><i class="fas fa-plus-circle text-xl"></i><span class="text-[10px]">create</span></button>
+          <button id="navinbox2" class="flex flex-col items-center"><i class="far fa-heart text-xl"></i><span class="text-[10px]">inbox</span></button>
+          <button id="navprofile2" class="nav-active flex flex-col items-center"><i class="far fa-user text-xl"></i><span class="text-[10px]">profile</span></button>
+        </div>
+      </div>
+    `;
+    document.getElementById('backhome')?.onclick = () => { currentpage = 'home'; render(); };
+    document.getElementById('editbio')?.onclick = async () => {
+      const bio = prompt('enter new bio:', userdata.bio);
+      if (bio) await fetchapi('/users/profile', { method: 'PUT', body: JSON.stringify({ bio }) });
+      renderprofilepage();
+    };
+    ['navhome2','navsearch2','navupload2','navinbox2','navprofile2'].forEach(id => {
+      document.getElementById(id)?.onclick = () => {
+        if (id.includes('home')) currentpage = 'home';
+        else if (id.includes('search')) currentpage = 'search';
+        else if (id.includes('upload')) currentpage = 'upload';
+        else if (id.includes('inbox')) currentpage = 'inbox';
+        else currentpage = 'profile';
+        render();
+      };
+    });
+  }
+  
+  function rendersearchpage() {
+    document.getElementById('app').innerHTML = `
+      <div class="flex flex-col h-full">
+        <div class="sticky top-0 bg-black/95 p-4 border-b border-white/10">
+          <div class="flex items-center gap-3"><button id="backhome2" class="text-2xl"><i class="fas fa-arrow-left"></i></button><div class="flex-1 bg-white/10 rounded-full px-4 py-2"><i class="fas fa-search mr-2"></i><input type="text" id="searchinput" placeholder="search users..." class="bg-transparent outline-none w-full"></div></div>
+        </div>
+        <div id="searchresults" class="flex-1 overflow-y-auto p-4"></div>
+        <div class="bottom-nav flex justify-around items-center py-2 px-4">
+          <button id="navhome3" class="flex flex-col items-center"><i class="fas fa-home text-xl"></i><span>home</span></button>
+          <button id="navsearch3" class="nav-active flex flex-col items-center"><i class="fas fa-search text-xl"></i><span>search</span></button>
+          <button id="navupload3" class="flex flex-col items-center"><i class="fas fa-plus-circle text-xl"></i><span>create</span></button>
+          <button id="navinbox3" class="flex flex-col items-center"><i class="far fa-heart text-xl"></i><span>inbox</span></button>
+          <button id="navprofile3" class="flex flex-col items-center"><i class="far fa-user text-xl"></i><span>profile</span></button>
+        </div>
+      </div>
+    `;
+    document.getElementById('backhome2')?.onclick = () => { currentpage = 'home'; render(); };
+    document.getElementById('searchinput')?.addEventListener('input', async (e) => {
+      const q = e.target.value;
+      if (q.length < 2) return;
+      const res = await fetchapi(`/users/search/all?q=${q}`);
+      const container = document.getElementById('searchresults');
+      container.innerHTML = res.map(u => `<div class="flex items-center gap-3 p-2 bg-white/5 rounded-lg mb-2"><img src="${u.avatar}" class="w-10 h-10 rounded-full"><div><div class="font-semibold">@${u.username}</div><div class="text-xs text-white/60">${u.bio || ''}</div></div></div>`).join('');
+    });
+    ['navhome3','navsearch3','navupload3','navinbox3','navprofile3'].forEach(id => {
+      document.getElementById(id)?.onclick = () => {
+        if (id.includes('home')) currentpage = 'home';
+        else if (id.includes('search')) currentpage = 'search';
+        else if (id.includes('upload')) currentpage = 'upload';
+        else if (id.includes('inbox')) currentpage = 'inbox';
+        else currentpage = 'profile';
+        render();
+      };
+    });
+  }
+  
+  function renderinboxpage() {
+    document.getElementById('app').innerHTML = `
+      <div class="flex flex-col h-full">
+        <div class="sticky top-0 bg-black/95 p-4 flex items-center gap-4 border-b border-white/10"><button id="backhome3" class="text-2xl"><i class="fas fa-arrow-left"></i></button><h1 class="text-xl font-bold">inbox</h1></div>
+        <div class="flex-1 p-4"><div class="bg-white/5 rounded-lg p-4 text-center text-white/60">notifications appear here</div></div>
+        <div class="bottom-nav flex justify-around items-center py-2 px-4">
+          <button id="navhome4" class="flex flex-col items-center"><i class="fas fa-home text-xl"></i><span>home</span></button>
+          <button id="navsearch4" class="flex flex-col items-center"><i class="fas fa-search text-xl"></i><span>search</span></button>
+          <button id="navupload4" class="flex flex-col items-center"><i class="fas fa-plus-circle text-xl"></i><span>create</span></button>
+          <button id="navinbox4" class="nav-active flex flex-col items-center"><i class="far fa-heart text-xl"></i><span>inbox</span></button>
+          <button id="navprofile4" class="flex flex-col items-center"><i class="far fa-user text-xl"></i><span>profile</span></button>
+        </div>
+      </div>
+    `;
+    document.getElementById('backhome3')?.onclick = () => { currentpage = 'home'; render(); };
+    ['navhome4','navsearch4','navupload4','navinbox4','navprofile4'].forEach(id => {
+      document.getElementById(id)?.onclick = () => {
+        if (id.includes('home')) currentpage = 'home';
+        else if (id.includes('search')) currentpage = 'search';
+        else if (id.includes('upload')) currentpage = 'upload';
+        else if (id.includes('inbox')) currentpage = 'inbox';
+        else currentpage = 'profile';
+        render();
+      };
+    });
+  }
+  
+  function renderuploadpage() {
+    document.getElementById('app').innerHTML = `
+      <div class="flex flex-col h-full">
+        <div class="sticky top-0 bg-black/95 p-4 flex items-center gap-4 border-b border-white/10"><button id="backhome4" class="text-2xl"><i class="fas fa-arrow-left"></i></button><h1 class="text-xl font-bold">upload video</h1></div>
+        <div class="flex-1 flex items-center justify-center p-8">
+          <div class="text-center space-y-4"><i class="fas fa-cloud-upload-alt text-6xl text-white/40"></i><input type="text" id="videourl" placeholder="youtube url" class="bg-white/10 rounded-full px-4 py-2 w-full"><input type="text" id="videocaption" placeholder="caption" class="bg-white/10 rounded-full px-4 py-2 w-full"><button id="uploadbtn" class="bg-red-500 px-8 py-3 rounded-full font-bold">upload</button></div>
+        </div>
+        <div class="bottom-nav flex justify-around items-center py-2 px-4">
+          <button id="navhome5" class="flex flex-col items-center"><i class="fas fa-home text-xl"></i><span>home</span></button>
+          <button id="navsearch5" class="flex flex-col items-center"><i class="fas fa-search text-xl"></i><span>search</span></button>
+          <button id="navupload5" class="nav-active flex flex-col items-center"><i class="fas fa-plus-circle text-xl"></i><span>create</span></button>
+          <button id="navinbox5" class="flex flex-col items-center"><i class="far fa-heart text-xl"></i><span>inbox</span></button>
+          <button id="navprofile5" class="flex flex-col items-center"><i class="far fa-user text-xl"></i><span>profile</span></button>
+        </div>
+      </div>
+    `;
+    document.getElementById('backhome4')?.onclick = () => { currentpage = 'home'; render(); };
+    document.getElementById('uploadbtn')?.onclick = async () => {
+      const videourl = document.getElementById('videourl').value;
+      const caption = document.getElementById('videocaption').value;
+      if (!videourl) return alert('enter url');
+      await fetchapi('/videos', { method: 'POST', body: JSON.stringify({ videourl, caption }) });
+      alert('uploaded!');
+      currentpage = 'home';
+      render();
+    };
+    ['navhome5','navsearch5','navupload5','navinbox5','navprofile5'].forEach(id => {
+      document.getElementById(id)?.onclick = () => {
+        if (id.includes('home')) currentpage = 'home';
+        else if (id.includes('search')) currentpage = 'search';
+        else if (id.includes('upload')) currentpage = 'upload';
+        else if (id.includes('inbox')) currentpage = 'inbox';
+        else currentpage = 'profile';
+        render();
+      };
+    });
+  }
+  
+  const stored = localStorage.getItem('axtokuser');
+  if (stored) {
+    try { currentuser = JSON.parse(stored); } catch(e) {}
+  }
+  if (localStorage.getItem('axtoktoken')) token = localStorage.getItem('axtoktoken');
+  render();
+})();
+</script>
+</body>
+  </html>
