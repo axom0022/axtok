@@ -1,5 +1,5 @@
 # axtok
-Axtok is a platform of social media | open sourced   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .  . . . . . . . . . . . . . . . . . . . 
+Axtok is a platform of social media | open sourced   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .  . . . . . . . . . . . . . . . . . . . 
 BACKEND = NodeJs (server) 
 
 1. Get a GitHub token → GitHub Settings → Developer settings → Personal access tokens → Generate (check repo scope ,if you dont know how, just enable/check all scopes/boxes). Copy it.
